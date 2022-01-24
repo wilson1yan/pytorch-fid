@@ -86,6 +86,66 @@ class ImagePathDataset(torch.utils.data.Dataset):
             img = self.transforms(img)
         return img
 
+        
+def get_activations_tensor(images, model, batch_size=50, dims=2048, device='cpu'):
+    model.eval()
+
+    pred_arr = np.empty((len(images), dims))
+    for i in range(0, len(images), batch_size):
+        batch = images[i:i+batch_size].to(device)
+        with torch.no_grad():
+            pred = model(batch)[0]
+
+        # If model output is not scalar, apply global spatial average pooling.
+        # This happens if you choose a dimensionality not equal 2048.
+        if pred.size(2) != 1 or pred.size(3) != 1:
+            pred = adaptive_avg_pool2d(pred, output_size=(1, 1))
+
+        pred = pred.squeeze(3).squeeze(2).cpu().numpy()
+        pred_arr[i:i+batch_size] = pred
+
+    return pred_arr
+
+
+def get_activations_dataset(dataset, model, batch_size=50, dims=2048, device='cpu',
+                            num_workers=4):
+    model.eval()
+
+    if batch_size > len(dataset):
+        print(('Warning: batch size is bigger than the data size. '
+               'Setting batch size to data size'))
+        batch_size = len(dataset)
+
+    dataloader = torch.utils.data.DataLoader(dataset,
+                                             batch_size=batch_size,
+                                             shuffle=False,
+                                             drop_last=False,
+                                             num_workers=num_workers)
+
+    pred_arr = np.empty((len(dataset), dims))
+
+    start_idx = 0
+
+    for batch, _ in tqdm(dataloader):
+        batch = batch.to(device)
+
+        with torch.no_grad():
+            pred = model(batch)[0]
+
+        # If model output is not scalar, apply global spatial average pooling.
+        # This happens if you choose a dimensionality not equal 2048.
+        if pred.size(2) != 1 or pred.size(3) != 1:
+            pred = adaptive_avg_pool2d(pred, output_size=(1, 1))
+
+        pred = pred.squeeze(3).squeeze(2).cpu().numpy()
+
+        pred_arr[start_idx:start_idx + pred.shape[0]] = pred
+
+        start_idx = start_idx + pred.shape[0]
+
+    return pred_arr
+
+
 
 def get_activations(files, model, batch_size=50, dims=2048, device='cpu',
                     num_workers=1):
@@ -223,6 +283,20 @@ def calculate_activation_statistics(files, model, batch_size=50, dims=2048,
                the inception model.
     """
     act = get_activations(files, model, batch_size, dims, device, num_workers)
+    mu = np.mean(act, axis=0)
+    sigma = np.cov(act, rowvar=False)
+    return mu, sigma
+
+    
+def calculate_activation_statistics_tensor(images, model, batch_size=50, dims=2048, device='cpu'):
+    act = get_activations_tensor(images, model, batch_size, dims, device)
+    mu = np.mean(act, axis=0)
+    sigma = np.cov(act, rowvar=False)
+    return mu, sigma
+
+
+def calculate_activation_statistics_dataset(dataset, model, batch_size=50, dims=2048, device='cpu'):
+    act = get_activations_tensor(dataset, model, batch_size, dims, device)
     mu = np.mean(act, axis=0)
     sigma = np.cov(act, rowvar=False)
     return mu, sigma
